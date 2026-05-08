@@ -1,0 +1,1010 @@
+"""Unit tests for GET /api/messages and GET /api/messages/<message_id>."""
+
+import json
+import sqlite3
+import tempfile
+import os
+
+import pytest
+
+from server import create_app
+
+# ---------------------------------------------------------------------------
+# DB setup helpers
+# ---------------------------------------------------------------------------
+
+CREATE_TABLE_SQL = """
+CREATE TABLE messages (
+    message_id    TEXT PRIMARY KEY,
+    thread_id     TEXT,
+    sender        TEXT,
+    recipients    TEXT,
+    labels        TEXT,
+    subject       TEXT,
+    raw           TEXT,
+    size          INTEGER,
+    timestamp     DATETIME,
+    is_read       INTEGER,
+    is_outgoing   INTEGER,
+    is_deleted    INTEGER,
+    last_indexed  DATETIME
+)
+"""
+
+SEED_ROWS = [
+    (
+        "msg1", "thread1",
+        '{"name": "Alice", "email": "alice@example.com"}',
+        '{"to": ["bob@example.com"], "cc": [], "bcc": []}',
+        '["INBOX", "Work"]',
+        "Hello Bob", 100,
+        "2024-01-10T10:00:00", 0, 0, 0,
+    ),
+    (
+        "msg2", "thread2",
+        '{"name": "Bob", "email": "bob@example.com"}',
+        '{"to": ["alice@example.com"], "cc": [], "bcc": []}',
+        '["INBOX"]',
+        "Re: Hello Bob", 80,
+        "2024-01-09T09:00:00", 1, 0, 0,
+    ),
+    (
+        "msg3", "thread3",
+        '{"name": "Charlie", "email": "charlie@example.com"}',
+        '{"to": ["alice@example.com"], "cc": [], "bcc": []}',
+        '["SENT"]',
+        "Meeting tomorrow", 120,
+        "2024-01-08T08:00:00", 1, 1, 0,
+    ),
+    (
+        "msg4", "thread4",
+        '{"name": "Dave", "email": "dave@example.com"}',
+        '{"to": ["alice@example.com"], "cc": [], "bcc": []}',
+        '["TRASH"]',
+        "Deleted message", 50,
+        "2024-01-07T07:00:00", 0, 0, 1,
+    ),
+    (
+        "msg5", "thread5",
+        '{"name": "Eve", "email": "eve@example.com"}',
+        '{"to": ["alice@example.com"], "cc": [], "bcc": []}',
+        '["Work"]',
+        "Project update", 200,
+        "2024-01-06T06:00:00", 0, 0, 0,
+    ),
+]
+
+# A minimal RFC 2822 multipart/alternative message with an HTML part
+_MULTIPART_RAW_HTML = (
+    "MIME-Version: 1.0\r\n"
+    "From: frank@example.com\r\n"
+    "To: alice@example.com\r\n"
+    "Subject: HTML message\r\n"
+    "Date: Mon, 05 Jan 2024 05:00:00 +0000\r\n"
+    "Content-Type: multipart/alternative; boundary=\"b123\"\r\n"
+    "\r\n"
+    "--b123\r\n"
+    "Content-Type: text/plain; charset=\"utf-8\"\r\n"
+    "\r\n"
+    "Hello in plain text\r\n"
+    "--b123\r\n"
+    "Content-Type: text/html; charset=\"utf-8\"\r\n"
+    "\r\n"
+    "<html><body><p>Hello in <b>HTML</b></p></body></html>\r\n"
+    "--b123--\r\n"
+)
+
+# Rows that include an explicit raw value with HTML:
+# (message_id, thread_id, sender, recipients, labels, subject, raw, size, timestamp, is_read, is_outgoing, is_deleted)
+SEED_ROWS_WITH_HTML = [
+    (
+        "msg_html", "thread_html",
+        '{"name": "Frank", "email": "frank@example.com"}',
+        '{"to": ["alice@example.com"], "cc": [], "bcc": []}',
+        '["INBOX"]',
+        "HTML message",
+        _MULTIPART_RAW_HTML,
+        150,
+        "2024-01-05T05:00:00", 0, 0, 0,
+    ),
+    (
+        "msg_no_html", "thread_no_html",
+        '{"name": "Grace", "email": "grace@example.com"}',
+        '{"to": ["alice@example.com"], "cc": [], "bcc": []}',
+        '["INBOX"]',
+        "Plain text only",
+        None,  # raw is NULL
+        90,
+        "2024-01-04T04:00:00", 0, 0, 0,
+    ),
+]
+
+
+CREATE_FTS_SQL = """
+CREATE VIRTUAL TABLE messages_fts
+USING fts5(
+    message_id UNINDEXED,
+    subject,
+    body_text,
+    sender_text,
+    tokenize='unicode61'
+)
+"""
+
+
+def _seed_db(path: str) -> None:
+    """Create and seed the messages table in the SQLite file at *path*."""
+    conn = sqlite3.connect(path)
+    conn.execute(CREATE_TABLE_SQL)
+    conn.execute(CREATE_FTS_SQL)
+    conn.executemany(
+        "INSERT INTO messages (message_id, thread_id, sender, recipients, labels, subject, raw, size, timestamp, is_read, is_outgoing, is_deleted, last_indexed) "
+        "VALUES (?,?,?,?,?,?,NULL,?,?,?,?,?,NULL)",
+        SEED_ROWS,
+    )
+    conn.executemany(
+        "INSERT INTO messages (message_id, thread_id, sender, recipients, labels, subject, raw, size, timestamp, is_read, is_outgoing, is_deleted, last_indexed) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL)",
+        SEED_ROWS_WITH_HTML,
+    )
+    # Populate FTS for SEED_ROWS (no raw, so body_text is empty)
+    for row in SEED_ROWS:
+        message_id, _, sender_json, _, _, subject = row[:6]
+        sender = json.loads(sender_json)
+        sender_text = f"{sender.get('name', '')} {sender.get('email', '')}"
+        conn.execute(
+            "INSERT INTO messages_fts (message_id, subject, body_text, sender_text) VALUES (?,?,?,?)",
+            (message_id, subject, "", sender_text),
+        )
+    # Populate FTS for SEED_ROWS_WITH_HTML
+    for row in SEED_ROWS_WITH_HTML:
+        message_id, _, sender_json, _, _, subject, raw = row[:7]
+        sender = json.loads(sender_json)
+        sender_text = f"{sender.get('name', '')} {sender.get('email', '')}"
+        # Extract plain text from raw for body_text
+        body_text = ""
+        if raw:
+            try:
+                from gmail_to_sqlite.message import extract_plain_from_raw
+                body_text = extract_plain_from_raw(raw) or ""
+            except Exception:
+                pass
+        conn.execute(
+            "INSERT INTO messages_fts (message_id, subject, body_text, sender_text) VALUES (?,?,?,?)",
+            (message_id, subject, body_text, sender_text),
+        )
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def db_path(tmp_path):
+    """Return the path to a seeded temporary SQLite database."""
+    path = str(tmp_path / "test_messages.db")
+    _seed_db(path)
+    return path
+
+
+@pytest.fixture
+def app(db_path):
+    """Create a Flask app backed by the seeded temporary database."""
+    flask_app = create_app(db_path=db_path)
+    flask_app.config["TESTING"] = True
+    return flask_app
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+# ---------------------------------------------------------------------------
+# 3.6 — Parameter validation tests
+# ---------------------------------------------------------------------------
+
+class TestParameterValidation:
+    def test_invalid_page_zero(self, client):
+        resp = client.get("/api/messages?page=0")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_invalid_page_negative(self, client):
+        resp = client.get("/api/messages?page=-1")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_invalid_page_string(self, client):
+        resp = client.get("/api/messages?page=abc")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_invalid_page_size_zero(self, client):
+        resp = client.get("/api/messages?page_size=0")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_invalid_page_size_negative(self, client):
+        resp = client.get("/api/messages?page_size=-5")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_invalid_page_size_too_large(self, client):
+        resp = client.get("/api/messages?page_size=201")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_invalid_page_size_string(self, client):
+        resp = client.get("/api/messages?page_size=xyz")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_valid_page_size_boundary_1(self, client):
+        resp = client.get("/api/messages?page_size=1")
+        assert resp.status_code == 200
+
+    def test_valid_page_size_boundary_200(self, client):
+        resp = client.get("/api/messages?page_size=200")
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 3.6 — Response envelope tests
+# ---------------------------------------------------------------------------
+
+class TestResponseEnvelope:
+    def test_envelope_fields_present(self, client):
+        resp = client.get("/api/messages")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "messages" in data
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+
+    def test_default_page_and_page_size(self, client):
+        resp = client.get("/api/messages")
+        data = resp.get_json()
+        assert data["page"] == 1
+        assert data["page_size"] == 50
+
+    def test_custom_page_and_page_size_reflected(self, client):
+        resp = client.get("/api/messages?page=2&page_size=10")
+        data = resp.get_json()
+        assert data["page"] == 2
+        assert data["page_size"] == 10
+
+    def test_total_excludes_deleted_by_default(self, client):
+        resp = client.get("/api/messages")
+        data = resp.get_json()
+        # 6 non-deleted messages in seed data (5 original + 2 html test rows)
+        assert data["total"] == 6
+
+    def test_messages_ordered_by_timestamp_desc(self, client):
+        resp = client.get("/api/messages")
+        data = resp.get_json()
+        timestamps = [m["timestamp"] for m in data["messages"]]
+        assert timestamps == sorted(timestamps, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# 3.6 — Filter tests
+# ---------------------------------------------------------------------------
+
+class TestFilters:
+    def test_search_q_subject(self, client):
+        resp = client.get("/api/messages?q=Hello")
+        data = resp.get_json()
+        # "Hello Bob", "Re: Hello Bob" (subject), and "msg_html" (body: "Hello in plain text") match
+        assert data["total"] == 3
+        ids = {m["message_id"] for m in data["messages"]}
+        assert ids == {"msg1", "msg2", "msg_html"}
+
+    def test_search_q_case_insensitive(self, client):
+        resp = client.get("/api/messages?q=hello")
+        data = resp.get_json()
+        assert data["total"] == 3
+
+    def test_search_q_sender(self, client):
+        resp = client.get("/api/messages?q=alice@example.com")
+        data = resp.get_json()
+        assert data["total"] == 1
+        assert data["messages"][0]["message_id"] == "msg1"
+
+    def test_search_q_body(self, client):
+        resp = client.get("/api/messages?q=Project")
+        data = resp.get_json()
+        assert data["total"] == 1
+        assert data["messages"][0]["message_id"] == "msg5"
+
+    def test_search_q_no_match(self, client):
+        resp = client.get("/api/messages?q=zzznomatch")
+        data = resp.get_json()
+        assert data["total"] == 0
+        assert data["messages"] == []
+
+    def test_label_filter_inbox(self, client):
+        resp = client.get("/api/messages?label=INBOX")
+        data = resp.get_json()
+        assert data["total"] == 4
+        ids = {m["message_id"] for m in data["messages"]}
+        assert ids == {"msg1", "msg2", "msg_html", "msg_no_html"}
+
+    def test_label_filter_work(self, client):
+        resp = client.get("/api/messages?label=Work")
+        data = resp.get_json()
+        assert data["total"] == 2
+        ids = {m["message_id"] for m in data["messages"]}
+        assert ids == {"msg1", "msg5"}
+
+    def test_label_filter_no_match(self, client):
+        resp = client.get("/api/messages?label=NONEXISTENT")
+        data = resp.get_json()
+        assert data["total"] == 0
+
+    def test_is_read_true(self, client):
+        resp = client.get("/api/messages?is_read=true")
+        data = resp.get_json()
+        assert data["total"] == 2
+        for m in data["messages"]:
+            assert m["is_read"] is True
+
+    def test_is_read_false(self, client):
+        resp = client.get("/api/messages?is_read=false")
+        data = resp.get_json()
+        assert data["total"] == 4
+        for m in data["messages"]:
+            assert m["is_read"] is False
+
+    def test_is_outgoing_true(self, client):
+        resp = client.get("/api/messages?is_outgoing=true")
+        data = resp.get_json()
+        assert data["total"] == 1
+        assert data["messages"][0]["message_id"] == "msg3"
+        for m in data["messages"]:
+            assert m["is_outgoing"] is True
+
+    def test_is_outgoing_false(self, client):
+        resp = client.get("/api/messages?is_outgoing=false")
+        data = resp.get_json()
+        for m in data["messages"]:
+            assert m["is_outgoing"] is False
+
+    def test_include_deleted_false_by_default(self, client):
+        resp = client.get("/api/messages")
+        data = resp.get_json()
+        for m in data["messages"]:
+            assert m["is_deleted"] is False
+
+    def test_include_deleted_true(self, client):
+        resp = client.get("/api/messages?include_deleted=true")
+        data = resp.get_json()
+        # All 7 messages including the deleted one
+        assert data["total"] == 7
+        ids = {m["message_id"] for m in data["messages"]}
+        assert "msg4" in ids
+
+    def test_pagination_page_size_limits_results(self, client):
+        resp = client.get("/api/messages?page_size=2")
+        data = resp.get_json()
+        assert len(data["messages"]) == 2
+        assert data["total"] == 6  # total is still 6
+
+    def test_pagination_second_page(self, client):
+        resp = client.get("/api/messages?page=2&page_size=2")
+        data = resp.get_json()
+        assert len(data["messages"]) == 2
+
+    def test_pagination_beyond_last_page(self, client):
+        resp = client.get("/api/messages?page=100&page_size=50")
+        data = resp.get_json()
+        assert data["messages"] == []
+        assert data["total"] == 6
+
+
+# ---------------------------------------------------------------------------
+# 3.7 — GET /api/messages/<message_id> tests
+# ---------------------------------------------------------------------------
+
+class TestGetMessage:
+    def test_existing_message_returns_200(self, client):
+        resp = client.get("/api/messages/msg1")
+        assert resp.status_code == 200
+
+    def test_existing_message_has_summary_fields(self, client):
+        resp = client.get("/api/messages/msg1")
+        data = resp.get_json()
+        for field in ("message_id", "thread_id", "sender", "labels", "subject",
+                      "timestamp", "is_read", "is_outgoing", "is_deleted"):
+            assert field in data, f"Missing field: {field}"
+
+    def test_existing_message_has_detail_fields(self, client):
+        resp = client.get("/api/messages/msg1")
+        data = resp.get_json()
+        assert "recipients" in data
+        assert "body" in data
+
+    def test_existing_message_correct_data(self, client):
+        resp = client.get("/api/messages/msg1")
+        data = resp.get_json()
+        assert data["message_id"] == "msg1"
+        assert data["subject"] == "Hello Bob"
+        assert data["sender"]["email"] == "alice@example.com"
+        assert data["body"] is None
+
+    def test_existing_message_sender_is_dict(self, client):
+        resp = client.get("/api/messages/msg1")
+        data = resp.get_json()
+        assert isinstance(data["sender"], dict)
+        assert "name" in data["sender"]
+        assert "email" in data["sender"]
+
+    def test_existing_message_labels_is_list(self, client):
+        resp = client.get("/api/messages/msg1")
+        data = resp.get_json()
+        assert isinstance(data["labels"], list)
+
+    def test_existing_message_recipients_is_dict(self, client):
+        resp = client.get("/api/messages/msg1")
+        data = resp.get_json()
+        assert isinstance(data["recipients"], dict)
+
+    def test_nonexistent_message_returns_404(self, client):
+        resp = client.get("/api/messages/does_not_exist")
+        assert resp.status_code == 404
+
+    def test_nonexistent_message_error_body(self, client):
+        resp = client.get("/api/messages/does_not_exist")
+        data = resp.get_json()
+        assert data == {"error": "Message not found"}
+
+    def test_existing_message_has_body_text(self, client):
+        """3.2 — GET /api/messages/<id> response includes a body key (plain text derived from raw)."""
+        resp = client.get("/api/messages/msg1")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "body" in data
+
+    def test_body_text_null_when_no_fts_entry(self, tmp_path):
+        """3.3 — body is null when raw is NULL (no plain text to extract)."""
+        db_file = str(tmp_path / "no_raw.db")
+        conn = sqlite3.connect(db_file)
+        conn.execute(CREATE_TABLE_SQL)
+        conn.execute(
+            "INSERT INTO messages (message_id, thread_id, sender, recipients, labels, "
+            "subject, raw, size, timestamp, is_read, is_outgoing, is_deleted, last_indexed) "
+            "VALUES (?,?,?,?,?,?,NULL,0,'2024-01-01T00:00:00',0,0,0,NULL)",
+            ("msg_no_raw", "thread_x", '{"name":"X","email":"x@example.com"}',
+             '{"to":[],"cc":[],"bcc":[]}', '["INBOX"]', "No raw subject"),
+        )
+        conn.commit()
+        conn.close()
+
+        flask_app = create_app(db_path=db_file)
+        flask_app.config["TESTING"] = True
+        c = flask_app.test_client()
+
+        resp = c.get("/api/messages/msg_no_raw")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "body" in data
+        assert data["body"] is None
+
+    def test_body_text_matches_fts_value(self, tmp_path):
+        """3.2 — body in the response is derived from raw via extract_plain_from_raw."""
+        import email, base64
+        # Build a minimal RFC 2822 message with a plain text part
+        raw = (
+            "From: y@example.com\r\nTo: z@example.com\r\n"
+            "Subject: FTS subject\r\nMIME-Version: 1.0\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n\r\nHello world"
+        )
+        db_file = str(tmp_path / "with_raw.db")
+        conn = sqlite3.connect(db_file)
+        conn.execute(CREATE_TABLE_SQL)
+        conn.execute(
+            "INSERT INTO messages (message_id, thread_id, sender, recipients, labels, "
+            "subject, raw, size, timestamp, is_read, is_outgoing, is_deleted, last_indexed) "
+            "VALUES (?,?,?,?,?,?,?,0,'2024-01-01T00:00:00',0,0,0,NULL)",
+            ("msg_with_raw", "thread_y", '{"name":"Y","email":"y@example.com"}',
+             '{"to":[],"cc":[],"bcc":[]}', '["INBOX"]', "FTS subject", raw),
+        )
+        conn.commit()
+        conn.close()
+
+        flask_app = create_app(db_path=db_file)
+        flask_app.config["TESTING"] = True
+        c = flask_app.test_client()
+
+        resp = c.get("/api/messages/msg_with_raw")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "Hello world" in (data.get("body") or "")
+
+
+# ---------------------------------------------------------------------------
+# 8.1–8.3 — body_html field tests
+# ---------------------------------------------------------------------------
+
+class TestBodyHtml:
+    def test_detail_returns_body_html_when_non_null(self, client):
+        """8.1 — GET /api/messages/<id> returns body_html derived from raw when raw has HTML."""
+        resp = client.get("/api/messages/msg_html")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "body_html" in data
+        assert data["body_html"] is not None
+        # The HTML part of _MULTIPART_RAW_HTML contains <html><body>...
+        assert "<html>" in data["body_html"] or "<html" in data["body_html"]
+
+    def test_detail_returns_body_html_null_when_no_html(self, client):
+        """8.2 — GET /api/messages/<id> returns body_html: null for a message with no raw."""
+        resp = client.get("/api/messages/msg_no_html")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "body_html" in data
+        assert data["body_html"] is None
+
+    def test_list_items_do_not_contain_body_html(self, client):
+        """8.3 — GET /api/messages list response items do not contain a body_html key."""
+        resp = client.get("/api/messages?page_size=200")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        for item in data["messages"]:
+            assert "body_html" not in item, (
+                f"List item for message_id={item.get('message_id')!r} "
+                "unexpectedly contains 'body_html'"
+            )
+
+
+# ---------------------------------------------------------------------------
+# RFC 2822 raw messages used by attachment tests
+# ---------------------------------------------------------------------------
+
+import base64 as _base64
+
+_ATTACH_BYTES = b"FAKE PDF CONTENT"
+_ATTACH_B64 = _base64.b64encode(_ATTACH_BYTES).decode("ascii")
+
+_IMAGE_BYTES = b"\x89PNG\r\nFAKE IMAGE DATA"
+_IMAGE_B64 = _base64.b64encode(_IMAGE_BYTES).decode("ascii")
+
+# Multipart/mixed with a PDF attachment
+_RAW_WITH_ATTACHMENT = (
+    "MIME-Version: 1.0\r\n"
+    "From: sender@example.com\r\n"
+    "To: recipient@example.com\r\n"
+    "Subject: Message with attachment\r\n"
+    "Date: Fri, 05 Jan 2024 05:00:00 +0000\r\n"
+    "Content-Type: multipart/mixed; boundary=\"mix1\"\r\n"
+    "\r\n"
+    "--mix1\r\n"
+    "Content-Type: text/plain; charset=\"utf-8\"\r\n"
+    "\r\n"
+    "See attached file.\r\n"
+    "--mix1\r\n"
+    "Content-Type: application/pdf\r\n"
+    "Content-Disposition: attachment; filename=\"report.pdf\"\r\n"
+    "Content-Transfer-Encoding: base64\r\n"
+    "\r\n"
+    f"{_ATTACH_B64}\r\n"
+    "--mix1--\r\n"
+)
+
+# Multipart/related with an inline PNG image (Content-ID)
+_RAW_WITH_CID_IMAGE = (
+    "MIME-Version: 1.0\r\n"
+    "From: sender@example.com\r\n"
+    "To: recipient@example.com\r\n"
+    "Subject: Message with inline image\r\n"
+    "Date: Thu, 04 Jan 2024 04:00:00 +0000\r\n"
+    "Content-Type: multipart/related; boundary=\"rel1\"\r\n"
+    "\r\n"
+    "--rel1\r\n"
+    "Content-Type: text/html; charset=\"utf-8\"\r\n"
+    "\r\n"
+    "<html><body><img src=\"cid:inline_img_001\"/></body></html>\r\n"
+    "--rel1\r\n"
+    "Content-Type: image/png\r\n"
+    "Content-ID: <inline_img_001>\r\n"
+    "Content-Disposition: inline; filename=\"logo.png\"\r\n"
+    "Content-Transfer-Encoding: base64\r\n"
+    "\r\n"
+    f"{_IMAGE_B64}\r\n"
+    "--rel1--\r\n"
+)
+
+
+def _make_db_with_raw(tmp_path, message_id: str, raw: str) -> str:
+    """Create a minimal DB with a single message that has the given raw source."""
+    path = str(tmp_path / f"{message_id}.db")
+    conn = sqlite3.connect(path)
+    conn.execute(CREATE_TABLE_SQL)
+    conn.execute(CREATE_FTS_SQL)
+    conn.execute(
+        "INSERT INTO messages (message_id, thread_id, sender, recipients, labels, "
+        "subject, raw, size, timestamp, is_read, is_outgoing, is_deleted, last_indexed) "
+        "VALUES (?,?,?,?,?,?,?,?,?,0,0,0,NULL)",
+        (
+            message_id, "thread_x",
+            '{"name": "Sender", "email": "sender@example.com"}',
+            '{"to": ["recipient@example.com"], "cc": [], "bcc": []}',
+            '["INBOX"]',
+            "Test subject",
+            raw, len(raw), "2024-01-05T05:00:00",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO messages_fts (message_id, subject, body_text, sender_text) VALUES (?,?,?,?)",
+        (message_id, "Test subject", "", ""),
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 17.1–17.5 — Attachment Web API tests
+# ---------------------------------------------------------------------------
+
+class TestAttachmentWebAPI:
+    """Tests for attachment-related endpoints derived from raw RFC 2822 source."""
+
+    @pytest.fixture
+    def client_with_attachment(self, tmp_path):
+        """Flask test client for a message that has a PDF attachment in raw."""
+        path = _make_db_with_raw(tmp_path, "msg_att", _RAW_WITH_ATTACHMENT)
+        flask_app = create_app(db_path=path)
+        flask_app.config["TESTING"] = True
+        return flask_app.test_client()
+
+    @pytest.fixture
+    def client_no_attachment(self, tmp_path):
+        """Flask test client for a plain-text message with no attachments."""
+        raw = (
+            "MIME-Version: 1.0\r\n"
+            "From: a@example.com\r\n"
+            "To: b@example.com\r\n"
+            "Subject: Plain\r\n"
+            "Date: Fri, 05 Jan 2024 05:00:00 +0000\r\n"
+            "Content-Type: text/plain; charset=\"utf-8\"\r\n"
+            "\r\n"
+            "Just text.\r\n"
+        )
+        path = _make_db_with_raw(tmp_path, "msg_plain", raw)
+        flask_app = create_app(db_path=path)
+        flask_app.config["TESTING"] = True
+        return flask_app.test_client()
+
+    # ------------------------------------------------------------------
+    # 17.1 — attachments array shape for a message WITH attachments
+    # ------------------------------------------------------------------
+
+    def test_attachments_array_shape_with_attachments(self, client_with_attachment):
+        """17.1 — GET /api/messages/<id> returns attachments array with correct shape."""
+        resp = client_with_attachment.get("/api/messages/msg_att")
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert "attachments" in data
+        assert isinstance(data["attachments"], list)
+        assert len(data["attachments"]) == 1
+
+        item = data["attachments"][0]
+        assert "filename" in item, "Missing 'filename' key"
+        assert "mime_type" in item, "Missing 'mime_type' key"
+        assert "size" in item, "Missing 'size' key"
+        assert "attachment_id" in item, "Missing 'attachment_id' key"
+        assert "data" not in item, "Response must NOT contain 'data' key"
+
+    def test_attachments_array_first_item_values(self, client_with_attachment):
+        """17.1 — Verify the attachment's field values are correct."""
+        resp = client_with_attachment.get("/api/messages/msg_att")
+        data = resp.get_json()
+        att = data["attachments"][0]
+        assert att["filename"] == "report.pdf"
+        assert att["mime_type"] == "application/pdf"
+        assert att["size"] == len(_ATTACH_BYTES)
+
+    # ------------------------------------------------------------------
+    # 17.2 — empty attachments array for a message WITHOUT attachments
+    # ------------------------------------------------------------------
+
+    def test_attachments_array_empty_for_message_without_attachments(self, client_no_attachment):
+        """17.2 — GET /api/messages/<id> returns an empty attachments array
+        when the message has no attachments."""
+        resp = client_no_attachment.get("/api/messages/msg_plain")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "attachments" in data
+        assert data["attachments"] == []
+
+    # ------------------------------------------------------------------
+    # 17.3 — by-filename endpoint returns raw bytes with correct Content-Type
+    # ------------------------------------------------------------------
+
+    def test_attachment_data_returns_raw_bytes_and_content_type(self, client_with_attachment):
+        """17.3 — by-filename endpoint returns the correct bytes and Content-Type."""
+        resp = client_with_attachment.get(
+            "/api/messages/msg_att/attachments/by-filename/report.pdf/data"
+        )
+        assert resp.status_code == 200
+        assert resp.data == _ATTACH_BYTES
+        assert resp.content_type == "application/pdf"
+
+    # ------------------------------------------------------------------
+    # 17.4 — by-filename endpoint returns 404 for unknown filename
+    # ------------------------------------------------------------------
+
+    def test_attachment_data_404_when_attachment_not_found(self, client_with_attachment):
+        """17.4 — by-filename endpoint returns HTTP 404 for an unknown filename."""
+        resp = client_with_attachment.get(
+            "/api/messages/msg_att/attachments/by-filename/nonexistent.xyz/data"
+        )
+        assert resp.status_code == 404
+
+    # ------------------------------------------------------------------
+    # 17.5 — attachment_count in list response reflects raw-parsed count
+    # ------------------------------------------------------------------
+
+    def test_attachment_count_in_list_response(self, client_with_attachment):
+        """17.5 — GET /api/messages list includes attachment_count derived from raw."""
+        resp = client_with_attachment.get("/api/messages")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        msg = next(m for m in data["messages"] if m["message_id"] == "msg_att")
+        assert msg["attachment_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 4.1 — GET /api/messages/stats tests
+# ---------------------------------------------------------------------------
+
+CREATE_GMAIL_INDEX_SQL = """
+CREATE TABLE gmail_index (
+    message_id  TEXT PRIMARY KEY,
+    synced      INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+
+class TestMessagesStats:
+    """Tests for GET /api/messages/stats (Requirement 4.1)."""
+
+    # ------------------------------------------------------------------
+    # 11.1 — Happy-path: messages + gmail_index both present
+    # ------------------------------------------------------------------
+
+    def test_stats_happy_path(self, tmp_path):
+        """11.1 — Returns correct total_messages, total_indexed, total_unsynced
+        when both messages and gmail_index tables are populated."""
+        db_file = str(tmp_path / "stats_happy.db")
+        conn = sqlite3.connect(db_file)
+        conn.execute(CREATE_TABLE_SQL)
+        conn.execute(CREATE_GMAIL_INDEX_SQL)
+
+        # Insert 4 non-deleted messages and 1 deleted message
+        conn.executemany(
+            "INSERT INTO messages (message_id, thread_id, sender, recipients, labels, "
+            "subject, raw, size, timestamp, is_read, is_outgoing, "
+            "is_deleted, last_indexed) VALUES (?,?,?,?,?,?,NULL,0,NULL,0,0,?,NULL)",
+            [
+                ("m1", "t1", "{}", "{}", "[]", "s1", 0),
+                ("m2", "t2", "{}", "{}", "[]", "s2", 0),
+                ("m3", "t3", "{}", "{}", "[]", "s3", 0),
+                ("m4", "t4", "{}", "{}", "[]", "s4", 0),
+                ("m5", "t5", "{}", "{}", "[]", "s5", 1),  # deleted
+            ],
+        )
+
+        # 3 indexed rows: 2 synced, 1 unsynced
+        conn.executemany(
+            "INSERT INTO gmail_index (message_id, synced) VALUES (?, ?)",
+            [("m1", 1), ("m2", 1), ("m3", 0)],
+        )
+        conn.commit()
+        conn.close()
+
+        flask_app = create_app(db_path=db_file)
+        flask_app.config["TESTING"] = True
+        client = flask_app.test_client()
+
+        resp = client.get("/api/messages/stats")
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert data["total_messages"] == 4   # excludes deleted
+        assert data["total_indexed"] == 3    # rows in gmail_index
+        assert data["total_unsynced"] == 1   # synced=0 rows
+
+    # ------------------------------------------------------------------
+    # 11.2 — Missing gmail_index table: graceful fallback
+    # ------------------------------------------------------------------
+
+    def test_stats_missing_gmail_index_table(self, tmp_path):
+        """11.2 — When gmail_index table does not exist, the endpoint returns
+        total_indexed == total_messages and total_unsynced == 0 (no 500)."""
+        db_file = str(tmp_path / "stats_no_index.db")
+        conn = sqlite3.connect(db_file)
+        conn.execute(CREATE_TABLE_SQL)
+
+        # Insert 3 non-deleted messages
+        conn.executemany(
+            "INSERT INTO messages (message_id, thread_id, sender, recipients, labels, "
+            "subject, raw, size, timestamp, is_read, is_outgoing, "
+            "is_deleted, last_indexed) VALUES (?,?,?,?,?,?,NULL,0,NULL,0,0,0,NULL)",
+            [("a1", "t1", "{}", "{}", "[]", "s1"),
+             ("a2", "t2", "{}", "{}", "[]", "s2"),
+             ("a3", "t3", "{}", "{}", "[]", "s3")],
+        )
+        conn.commit()
+        conn.close()
+
+        flask_app = create_app(db_path=db_file)
+        flask_app.config["TESTING"] = True
+        client = flask_app.test_client()
+
+        resp = client.get("/api/messages/stats")
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert data["total_messages"] == 3
+        assert data["total_indexed"] == 3    # fallback: equals total_messages
+        assert data["total_unsynced"] == 0   # fallback: 0
+
+    # ------------------------------------------------------------------
+    # 11.3 — Missing messages table: returns zeros, not 500
+    # ------------------------------------------------------------------
+
+    def test_stats_missing_messages_table(self, tmp_path):
+        """11.3 — When messages table does not exist, the endpoint returns
+        {"total_messages": 0, "total_indexed": 0, "total_unsynced": 0} (no 500)."""
+        db_file = str(tmp_path / "stats_no_messages.db")
+        # Create an empty DB with no tables at all
+        conn = sqlite3.connect(db_file)
+        conn.commit()
+        conn.close()
+
+        flask_app = create_app(db_path=db_file)
+        flask_app.config["TESTING"] = True
+        client = flask_app.test_client()
+
+        resp = client.get("/api/messages/stats")
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert data == {"total_messages": 0, "total_indexed": 0, "total_unsynced": 0}
+
+
+# ---------------------------------------------------------------------------
+# 13.1–13.3 — by-filename attachment endpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestByFilenameAttachment:
+    """Tests for GET /api/messages/<id>/attachments/by-filename/<filename>/data."""
+
+    @pytest.fixture
+    def client_raw_attach(self, tmp_path):
+        """Flask test client for a message whose raw source contains a PDF attachment."""
+        path = _make_db_with_raw(tmp_path, "msg_raw_attach", _RAW_WITH_ATTACHMENT)
+        flask_app = create_app(db_path=path)
+        flask_app.config["TESTING"] = True
+        return flask_app.test_client()
+
+    # ------------------------------------------------------------------
+    # 13.1 — by-filename found via raw source
+    # ------------------------------------------------------------------
+
+    def test_by_filename_raw_source_returns_200(self, client_raw_attach):
+        """13.1 — by-filename endpoint returns 200 when attachment is in raw source."""
+        resp = client_raw_attach.get(
+            "/api/messages/msg_raw_attach/attachments/by-filename/report.pdf/data"
+        )
+        assert resp.status_code == 200
+
+    def test_by_filename_raw_source_correct_bytes(self, client_raw_attach):
+        """13.1 — by-filename endpoint returns the correct bytes from raw source."""
+        resp = client_raw_attach.get(
+            "/api/messages/msg_raw_attach/attachments/by-filename/report.pdf/data"
+        )
+        assert resp.data == _ATTACH_BYTES
+
+    def test_by_filename_raw_source_correct_content_type(self, client_raw_attach):
+        """13.1 — by-filename endpoint returns the correct Content-Type from raw source."""
+        resp = client_raw_attach.get(
+            "/api/messages/msg_raw_attach/attachments/by-filename/report.pdf/data"
+        )
+        assert resp.content_type == "application/pdf"
+
+    # ------------------------------------------------------------------
+    # 13.2 — by-filename 404 for unknown filename
+    # ------------------------------------------------------------------
+
+    def test_by_filename_404_for_unknown_filename(self, client_raw_attach):
+        """13.2 — by-filename endpoint returns 404 when filename does not exist."""
+        resp = client_raw_attach.get(
+            "/api/messages/msg_raw_attach/attachments/by-filename/nonexistent.xyz/data"
+        )
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 13.3–13.4 — GET /api/cid/<content_id> tests
+# ---------------------------------------------------------------------------
+
+
+class TestCidImage:
+    """Tests for GET /api/cid/<content_id>."""
+
+    @pytest.fixture
+    def client_cid(self, tmp_path):
+        """Flask test client for a message whose raw source contains an inline image."""
+        path = _make_db_with_raw(tmp_path, "msg_cid", _RAW_WITH_CID_IMAGE)
+        flask_app = create_app(db_path=path)
+        flask_app.config["TESTING"] = True
+        return flask_app.test_client()
+
+    # ------------------------------------------------------------------
+    # 13.3 — CID found via raw source
+    # ------------------------------------------------------------------
+
+    def test_cid_found_returns_200(self, client_cid):
+        """13.3 — GET /api/cid/<content_id> returns 200 when the inline image exists."""
+        resp = client_cid.get("/api/cid/inline_img_001?msg=msg_cid")
+        assert resp.status_code == 200
+
+    def test_cid_found_correct_bytes(self, client_cid):
+        """13.3 — GET /api/cid/<content_id> returns the correct image bytes."""
+        resp = client_cid.get("/api/cid/inline_img_001?msg=msg_cid")
+        assert resp.data == _IMAGE_BYTES
+
+    def test_cid_found_correct_content_type(self, client_cid):
+        """13.3 — GET /api/cid/<content_id> returns the correct Content-Type."""
+        resp = client_cid.get("/api/cid/inline_img_001?msg=msg_cid")
+        assert resp.content_type == "image/png"
+
+    # ------------------------------------------------------------------
+    # 13.4 — CID 404 for unknown content_id
+    # ------------------------------------------------------------------
+
+    def test_cid_404_for_unknown_content_id(self, client_cid):
+        """13.4 — GET /api/cid/<content_id> returns 404 for an unknown content_id."""
+        resp = client_cid.get("/api/cid/nonexistent_cid?msg=msg_cid")
+        assert resp.status_code == 404
+
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — messages table is queried directly (no view dependency)
+# ---------------------------------------------------------------------------
+
+
+class TestMessagesViewMissing:
+    """GET /api/messages works without messages_view — queries messages directly."""
+
+    def test_list_works_without_view(self, tmp_path):
+        """GET /api/messages returns 200 when only the messages table exists (no view)."""
+        db_file = str(tmp_path / "no_view.db")
+        conn = sqlite3.connect(db_file)
+        conn.execute(CREATE_TABLE_SQL)
+        conn.execute(
+            "INSERT INTO messages (message_id, thread_id, sender, recipients, labels, "
+            "subject, raw, size, timestamp, is_read, is_outgoing, is_deleted, last_indexed) "
+            "VALUES (?,?,?,?,?,?,NULL,0,'2024-01-01T00:00:00',0,0,0,NULL)",
+            ("m1", "t1", "{}", "{}", "[]", "subject"),
+        )
+        conn.commit()
+        conn.close()
+
+        flask_app = create_app(db_path=db_file)
+        flask_app.config["TESTING"] = True
+        client = flask_app.test_client()
+
+        resp = client.get("/api/messages")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["total"] == 1

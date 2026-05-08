@@ -1,0 +1,823 @@
+# -----------------------------------------------------------------------------
+# OS & SYSTEM FILES
+# -----------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+Icon
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# -----------------------------------------------------------------------------
+# EDITORS & IDEs
+# -----------------------------------------------------------------------------
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains (IntelliJ, WebStorm, PyCharm, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.idea_modules/
+
+# Vim / Neovim
+*.swp
+*.swo
+*.swn
+*~
+.netrwhist
+Session.vim
+.vim/
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+# Eclipse
+.classpath
+.project
+.settings/
+.loadpath
+.recommenders/
+
+# NetBeans
+nbproject/private/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+# Kiro / AI IDEs
+.kiro/
+
+# -----------------------------------------------------------------------------
+# NODE / JAVASCRIPT / TYPESCRIPT
+# -----------------------------------------------------------------------------
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-store/
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.npm/
+.eslintcache
+.stylelintcache
+.node_repl_history
+*.tsbuildinfo
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+.vite/
+dist/
+dist-ssr/
+build/
+out/
+.output/
+.svelte-kit/
+.solid/
+storybook-static/
+coverage/
+.nyc_output/
+*.lcov
+lib-cov/
+.grunt/
+bower_components/
+jspm_packages/
+web_modules/
+.serverless/
+.fusebox/
+.dynamodb/
+.tern-port
+.env
+.env.*
+!.env.example
+!.env.template
+
+# -----------------------------------------------------------------------------
+# PYTHON
+# -----------------------------------------------------------------------------
+
+# Bytecode & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.pyo
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+RECORD
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.virtualenv/
+.conda/
+conda-meta/
+__pypackages__/
+
+# Testing
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.pytest_cache/
+pytest.ini
+cover/
+.hypothesis/
+
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+pyrightconfig.json
+
+# Linters & formatters
+.ruff_cache/
+.flake8
+.pylintrc
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+profile_default/
+ipython_config.py
+*.ipynb
+
+# Django
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+instance/
+.webassets-cache
+
+# Flask
+instance/
+
+# Scrapy
+.scrapy
+
+# Sphinx
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Sage
+*.sage.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.toml
+.poetry/
+
+# PDM
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# Cython
+cython_debug/
+
+# Spyder
+.spyderproject.db
+.spyproject
+
+# Rope
+.ropeproject
+
+# mkdocs
+/site
+
+# Translations
+*.mo
+*.pot
+
+# -----------------------------------------------------------------------------
+# JAVA / KOTLIN / SCALA
+# -----------------------------------------------------------------------------
+
+*.class
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+target/
+.mtj.tmp/
+.classpath
+.project
+.settings/
+.factorypath
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+.flattened-pom.xml
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# -----------------------------------------------------------------------------
+# C / C++
+# -----------------------------------------------------------------------------
+
+*.d
+*.slo
+*.lo
+*.o
+*.obj
+*.gch
+*.pch
+*.so
+*.dylib
+*.dll
+*.mod
+*.smod
+*.lai
+*.la
+*.a
+*.lib
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+*.dSYM/
+*.su
+*.idb
+*.pdb
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+CMakeUserPresets.json
+
+# -----------------------------------------------------------------------------
+# RUST
+# -----------------------------------------------------------------------------
+
+debug/
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# -----------------------------------------------------------------------------
+# GO
+# -----------------------------------------------------------------------------
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+vendor/
+
+# -----------------------------------------------------------------------------
+# RUBY
+# -----------------------------------------------------------------------------
+
+*.gem
+*.rbc
+/.config
+/coverage/
+/InstalledFiles
+/pkg/
+/spec/reports/
+/spec/examples.txt
+/test/tmp/
+/test/version_tmp/
+/tmp/
+.rspec
+/_yardoc/
+/doc/
+/rdoc/
+/.bundle/
+/lib/bundler/man/
+Gemfile.lock
+.ruby-version
+.ruby-gemset
+.rvmrc
+vendor/bundle
+
+# -----------------------------------------------------------------------------
+# PHP
+# -----------------------------------------------------------------------------
+
+vendor/
+composer.phar
+composer.lock
+.env
+.phpunit.result.cache
+.phpunit.cache/
+phpunit.xml
+.php-cs-fixer.cache
+.php_cs.cache
+
+# -----------------------------------------------------------------------------
+# .NET / C#
+# -----------------------------------------------------------------------------
+
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+.vs/
+Generated\ Files/
+*.pidb
+*.svclog
+*.scc
+_TeamCity*
+.dotcover
+.axoCover/
+.coverage
+*.coveragexml
+_NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+*.ncrunchproject
+AutoTest.Net/
+[Ee]xpress/
+DocProject/buildhelp/
+DocProject/Help/*.HxT
+DocProject/Help/*.HxC
+DocProject/Help/*.hhc
+DocProject/Help/*.hhk
+DocProject/Help/*.hhp
+DocProject/Help/Html2/
+DocProject/Help/html/
+publish/
+*.[Pp]ublish.xml
+*.azurePubxml
+*.pubxml
+*.publishproj
+PublishScripts/
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+csx/
+*.build.csdef
+ecf/
+rcf/
+AppPackages/
+BundleArtifacts/
+Package.StoreAssociation.xml
+_pkginfo.txt
+*.appx
+*.appxbundle
+*.appxupload
+*_i.c
+*_p.c
+*_h.h
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.pch
+*.pdb
+*.ipdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*_wpftmp.csproj
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.svclog
+*.scc
+project.lock.json
+project.fragment.lock.json
+artifacts/
+ScaffoldingReadMe.txt
+StyleCopReport.xml
+*.[Cc]ache
+ClientBin/
+~$*
+*~
+*.dbmdl
+*.dbproj.schemaview
+*.jfm
+*.pfx
+*.publishsettings
+orleans.codegen.cs
+Generated_Code/
+_UpgradeReport_Files/
+Backup*/
+UpgradeLog*.XML
+UpgradeLog*.htm
+ServiceFabricBackup/
+*.rptproj.bak
+*.mdf
+*.ldf
+*.ndf
+*.rdl.data
+*.bim.layout
+*.bim_*.settings
+*.rptproj.rsuser
+*- [Bb]ackup.rdl
+*- [Bb]ackup ([0-9]).rdl
+*- [Bb]ackup ([0-9][0-9]).rdl
+FakesAssemblies/
+*.GhostDoc.xml
+.ncrunchsolution
+*.psess
+*.vsp
+*.vspx
+*.sap
+.TeamCity
+*.DotSettings.user
+_Chutzpah*
+*.MM.PATCH
+.localhistory/
+.vshistory/
+healthchecksdb
+MigrationBackup/
+ipch/
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+*.sdf
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+*.psess
+*.vsp
+*.vspx
+*.sap
+TeamMentor_Editor_Temp/
+
+# -----------------------------------------------------------------------------
+# DATABASES
+# -----------------------------------------------------------------------------
+
+*.sqlite
+*.sqlite3
+*.db
+*.db3
+*.s3db
+*.sl3
+*.mdb
+*.accdb
+*.sql.bak
+dump.rdb
+
+# -----------------------------------------------------------------------------
+# LOGS & TEMP FILES
+# -----------------------------------------------------------------------------
+
+*.log
+*.logs
+logs/
+log/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.pid
+*.seed
+*.pid.lock
+pids/
+
+# -----------------------------------------------------------------------------
+# SECRETS & CREDENTIALS
+# -----------------------------------------------------------------------------
+
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert
+*.crt
+*.cer
+*.der
+id_rsa
+id_rsa.*
+id_dsa
+id_dsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+*.ppk
+.netrc
+.htpasswd
+secrets.yml
+secrets.yaml
+secrets.json
+credentials.json
+service-account*.json
+*_credentials*
+*_secret*
+config/secrets*
+config/master.key
+config/credentials.yml.enc
+
+# -----------------------------------------------------------------------------
+# CLOUD & INFRASTRUCTURE
+# -----------------------------------------------------------------------------
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# AWS
+.aws/credentials
+.aws/config
+*.pem
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+.kube/
+
+# Ansible
+*.retry
+inventory/host_vars/
+inventory/group_vars/
+
+# Serverless
+.serverless/
+
+# -----------------------------------------------------------------------------
+# TESTING & COVERAGE
+# -----------------------------------------------------------------------------
+
+coverage/
+.coverage
+*.lcov
+.nyc_output/
+test-results/
+test-report/
+junit.xml
+*.snap.bak
+cypress/videos/
+cypress/screenshots/
+playwright-report/
+playwright/.cache/
+
+# -----------------------------------------------------------------------------
+# BUILD ARTIFACTS & PACKAGES
+# -----------------------------------------------------------------------------
+
+dist/
+build/
+out/
+bin/
+obj/
+*.min.js
+*.min.css
+*.bundle.js
+*.chunk.js
+*.map
+!*.map.example
+
+# -----------------------------------------------------------------------------
+# DOCUMENTATION BUILD
+# -----------------------------------------------------------------------------
+
+docs/_build/
+docs/_site/
+site/
+_site/
+.docusaurus/
+.cache-loader/
+
+# -----------------------------------------------------------------------------
+# MOBILE
+# -----------------------------------------------------------------------------
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+local.properties
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+*.keystore
+!debug.keystore
+
+# iOS / Xcode
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+*.xcworkspace/*
+!*.xcworkspace/contents.xcworkspacedata
+**/xcshareddata/WorkspaceSettings.xcsettings
+DerivedData/
+*.hmap
+*.ipa
+*.xcuserstate
+*.xcscmblueprint
+*.moved-aside
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+Pods/
+
+# React Native
+.expo/
+.expo-shared/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+
+# -----------------------------------------------------------------------------
+# MISC
+# -----------------------------------------------------------------------------
+
+*.patch
+*.diff
+.history/
+.cache/
+*.lock
+!package-lock.json
+!yarn.lock
+!Gemfile.lock
+!Cargo.lock
+*.tgz
+*.gz
+*.zip
+*.tar
+*.7z
+*.dmg
+*.iso
+*.img
+
+.data
